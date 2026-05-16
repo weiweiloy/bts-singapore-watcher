@@ -115,30 +115,37 @@ def build_alert_message(
     changed_dates: list[str],
     diff_lines: list[str],
 ) -> str:
-    lines = [
-        "🚨🚨🚨 TICKET ALERT 🚨🚨🚨",
-        "🎟️🎟️🎟️ BTS SINGAPORE 🎟️🎟️🎟️",
-        "",
-        f"📅 Snapshot: {snapshot_date}",
-        "",
-    ]
     if changed_dates:
-        lines.append("✨ Dates no longer 'STAY TUNED':")
+        # A Singapore date has actually flipped on the live page right now.
+        lines = [
+            "🚨🚨🚨 TICKET ALERT 🚨🚨🚨",
+            "🎟️🎟️🎟️ BTS SINGAPORE 🎟️🎟️🎟️",
+            "",
+            f"📅 Snapshot: {snapshot_date}",
+            "",
+            "✨ Dates no longer 'STAY TUNED':",
+        ]
         for entry in changed_dates:
             lines.append(f"  🎉 {entry}")
+        lines.append("")
+        lines.append("💜 Go check Claude for the full analysis. 💜")
     else:
-        lines.append("⚠️ Relevant change detected but no specific Singapore date flipped.")
-        lines.append("Check the page directly: https://ibighit.com/en/bts/tour/")
-    lines.append("")
-    lines.append("🔍 Diff highlights:")
-    for line in diff_lines[:15]:
-        lines.append(f"  {line}")
-    if len(diff_lines) > 15:
-        lines.append(f"  ...and {len(diff_lines) - 15} more line(s).")
-    lines.append("")
-    lines.append("💜 Go check Claude for the full analysis. 💜")
+        # The page changed in some keyword-relevant way, but no Singapore
+        # date is currently showing anything other than STAY TUNED.
+        lines = [
+            "👀 Heads up",
+            "",
+            f"📅 Snapshot: {snapshot_date}",
+            "",
+            "Something on the BTS tour page changed (a ticket-related word "
+            "appeared or disappeared in today's snapshot), but all four "
+            "Singapore dates still say 'STAY TUNED'.",
+            "",
+            "Could be a change elsewhere on the page (another city flipped, "
+            "or wording was updated). Worth a quick look:",
+            "https://ibighit.com/en/bts/tour/",
+        ]
     return "\n".join(lines)[:3800]
-
 
 def main() -> int:
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
