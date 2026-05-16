@@ -49,6 +49,53 @@ SINGAPORE_DATES = [
     "DECEMBER 22, 2026",
 ]
 
+# Months we expect to see as headers in the BTS tour page text.
+MONTHS = (
+    "JANUARY", "FEBRUARY", "MARCH", "APRIL", "MAY", "JUNE",
+    "JULY", "AUGUST", "SEPTEMBER", "OCTOBER", "NOVEMBER", "DECEMBER",
+)
+
+
+def find_context_for_line(text: str, target: str) -> str:
+    """
+    Given the full snapshot text and a target line, find the nearest
+    preceding date and city so we can say 'this changed in the
+    Singapore December 17 entry'.
+
+    Returns a short context string like 'DECEMBER 17, 2026 — SINGAPORE'
+    or an empty string if no context can be found.
+    """
+    lines = text.splitlines()
+    target_clean = target.strip()
+
+    # Find the line in the snapshot
+    target_index = None
+    for i, line in enumerate(lines):
+        if line.strip() == target_clean:
+            target_index = i
+            break
+
+    if target_index is None:
+        return ""
+
+    # Walk backwards looking for a date line, then take the line after it
+    # (which is the city per the page's structure: DATE / CITY / STATUS).
+    date_line = None
+    city_line = None
+    for j in range(target_index - 1, max(target_index - 10, -1), -1):
+        candidate = lines[j].strip()
+        if candidate.upper().startswith(MONTHS):
+            date_line = candidate
+            # The city is the line immediately after the date
+            if j + 1 < len(lines):
+                city_line = lines[j + 1].strip()
+            break
+
+    if date_line and city_line:
+        return f"{date_line} — {city_line}"
+    if date_line:
+        return date_line
+    return ""
 
 def latest_two_snapshots() -> list[pathlib.Path]:
     files = sorted(SNAPSHOT_DIR.glob("*.txt"))
@@ -114,9 +161,10 @@ def build_alert_message(
     snapshot_date: str,
     changed_dates: list[str],
     diff_lines: list[str],
+    old_text: str,
+    new_text: str,
 ) -> str:
     if changed_dates:
-        # A Singapore date has flipped on the live page right now.
         lines = [
             "🚨🚨🚨 TICKET ALERT 🚨🚨🚨",
             "🎟️🎟️🎟️ BTS SINGAPORE 🎟️🎟️🎟️",
@@ -130,6 +178,53 @@ def build_alert_message(
         lines.append("")
         lines.append("💜 Go check Claude for the full analysis. 💜")
         return "\n".join(lines)[:3800]
+
+    added_entries = []
+    for line in diff_lines:
+        if line.startswith("+") and not line.startswith("+++"):
+            text = line[1:].strip()
+            context = find_context_for_line(new_text, text)
+            if context:
+                added_entries.append(f"{context}: {text}")
+            else:
+                added_entries.append(text)
+
+    removed_entries = []
+    for line in diff_lines:
+        if line.startswith("-") and not line.startswith("---"):
+            text = line[1:].strip()
+            context = find_context_for_line(old_text, text)
+            if context:
+                removed_entries.append(f"{context}: {text}")
+            else:
+                removed_entries.append(text)
+
+    lines = [
+        "👀 Heads up",
+        "",
+        f"📅 Snapshot: {snapshot_date}",
+        "",
+        "All four Singapore dates still say 'STAY TUNED' on the live page right now.",
+        "",
+        "But the page wording changed in a ticket-related way since the last snapshot:",
+        "",
+    ]
+    if added_entries:
+        lines.append("➕ Newly appearing:")
+        for entry in added_entries[:10]:
+            lines.append(f"   {entry}")
+        if len(added_entries) > 10:
+            lines.append(f"   ...and {len(added_entries) - 10} more.")
+        lines.append("")
+    if removed_entries:
+        lines.append("➖ Disappeared:")
+        for entry in removed_entries[:10]:
+            lines.append(f"   {entry}")
+        if len(removed_entries) > 10:
+            lines.append(f"   ...and {len(removed_entries) - 10} more.")
+        lines.append("")
+    lines.append("Page: https://ibighit.com/en/bts/tour/")
+    return "\n".join(lines)[:3800]
 
     # Otherwise: keywords appeared/disappeared in the diff, but no Singapore
     # date is currently on sale. Show what actually changed so the user can
@@ -194,7 +289,11 @@ def main() -> int:
             message = build_status_message(snapshot_date)
         else:
             changed = changed_singapore_dates(new_text)
-            message = build_alert_message(snapshot_date, changed, diff_lines)
+            message = build_alert_message(
+                snapshot_date, changed, diff_lines,
+                old_text=old_path.read_text(encoding="utf-8"),
+                new_text=new_text,
+            )
 
     for chat_id in chat_ids:
         try:
