@@ -116,35 +116,52 @@ def build_alert_message(
     diff_lines: list[str],
 ) -> str:
     if changed_dates:
-        # A Singapore date has actually flipped on the live page right now.
+        # A Singapore date has flipped on the live page right now.
         lines = [
             "🚨🚨🚨 TICKET ALERT 🚨🚨🚨",
             "🎟️🎟️🎟️ BTS SINGAPORE 🎟️🎟️🎟️",
             "",
             f"📅 Snapshot: {snapshot_date}",
             "",
-            "✨ Dates no longer 'STAY TUNED':",
+            "✨ Singapore dates no longer 'STAY TUNED':",
         ]
         for entry in changed_dates:
             lines.append(f"  🎉 {entry}")
         lines.append("")
         lines.append("💜 Go check Claude for the full analysis. 💜")
-    else:
-        # The page changed in some keyword-relevant way, but no Singapore
-        # date is currently showing anything other than STAY TUNED.
-        lines = [
-            "👀 Heads up",
-            "",
-            f"📅 Snapshot: {snapshot_date}",
-            "",
-            "Something on the BTS tour page changed (a ticket-related word "
-            "appeared or disappeared in today's snapshot), but all four "
-            "Singapore dates still say 'STAY TUNED'.",
-            "",
-            "Could be a change elsewhere on the page (another city flipped, "
-            "or wording was updated). Worth a quick look:",
-            "https://ibighit.com/en/bts/tour/",
-        ]
+        return "\n".join(lines)[:3800]
+
+    # Otherwise: keywords appeared/disappeared in the diff, but no Singapore
+    # date is currently on sale. Show what actually changed so the user can
+    # see it for themselves.
+    added = [l[1:].strip() for l in diff_lines if l.startswith("+")]
+    removed = [l[1:].strip() for l in diff_lines if l.startswith("-")]
+
+    lines = [
+        "👀 Heads up",
+        "",
+        f"📅 Snapshot: {snapshot_date}",
+        "",
+        "All four Singapore dates still say 'STAY TUNED' on the live page right now.",
+        "",
+        "But the page wording changed in a ticket-related way since the last snapshot:",
+        "",
+    ]
+    if added:
+        lines.append("➕ Newly appearing lines:")
+        for entry in added[:10]:
+            lines.append(f"   {entry}")
+        if len(added) > 10:
+            lines.append(f"   ...and {len(added) - 10} more.")
+        lines.append("")
+    if removed:
+        lines.append("➖ Lines that disappeared:")
+        for entry in removed[:10]:
+            lines.append(f"   {entry}")
+        if len(removed) > 10:
+            lines.append(f"   ...and {len(removed) - 10} more.")
+        lines.append("")
+    lines.append("Page: https://ibighit.com/en/bts/tour/")
     return "\n".join(lines)[:3800]
 
 def main() -> int:
