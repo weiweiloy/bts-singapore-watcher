@@ -1,20 +1,25 @@
 """
-Compares the two latest snapshots in snapshots/. If meaningful changes
-are detected (additions or removals involving Singapore or other
-ticket-release keywords), sends a Telegram alert to all configured
-chat IDs.
+Compares the two latest snapshots in snapshots/ and sends a Telegram
+status message every run:
+
+  - If a relevant change is detected (Singapore/ticket/Weverse/etc.
+    appears in the diff), send a TICKET ALERT message describing
+    which Singapore dates appear to have changed.
+  - If no relevant change is detected, send a plain status message
+    confirming Singapore is still "stay tuned".
 
 Reads two env vars:
   TELEGRAM_BOT_TOKEN  — the bot's API token
   TELEGRAM_CHAT_IDS   — comma-separated list of chat IDs
 
 Designed to be run by GitHub Actions after the fetcher.
-Exits 0 whether or not an alert was sent (no alert is not an error).
 """
 
+import datetime
 import difflib
 import os
 import pathlib
+import re
 import sys
 import urllib.parse
 import urllib.request
@@ -22,7 +27,6 @@ import urllib.request
 SNAPSHOT_DIR = pathlib.Path(__file__).parent.parent / "snapshots"
 
 # Keywords that make a diff line worth alerting on.
-# Case-insensitive matching is applied below.
 ALERT_KEYWORDS = [
     "singapore",
     "ticket",
@@ -37,6 +41,14 @@ ALERT_KEYWORDS = [
     "indoor stadium",
 ]
 
+# Singapore dates we are watching.
+SINGAPORE_DATES = [
+    "DECEMBER 17, 2026",
+    "DECEMBER 19, 2026",
+    "DECEMBER 20, 2026",
+    "DECEMBER 22, 2026",
+]
+
 
 def latest_two_snapshots() -> list[pathlib.Path]:
     files = sorted(SNAPSHOT_DIR.glob("*.txt"))
@@ -44,11 +56,9 @@ def latest_two_snapshots() -> list[pathlib.Path]:
 
 
 def relevant_diff_lines(old_lines: list[str], new_lines: list[str]) -> list[str]:
-    """Return diff lines containing any alert keyword."""
     diff = difflib.unified_diff(old_lines, new_lines, lineterm="")
     relevant = []
     for line in diff:
-        # Only consider added/removed lines, not headers or context
         if not (line.startswith("+") or line.startswith("-")):
             continue
         if line.startswith("+++") or line.startswith("---"):
@@ -57,6 +67,27 @@ def relevant_diff_lines(old_lines: list[str], new_lines: list[str]) -> list[str]
         if any(keyword in lower for keyword in ALERT_KEYWORDS):
             relevant.append(line)
     return relevant
+
+
+def changed_singapore_dates(new_text: str) -> list[str]:
+    """Return Singapore dates whose entry no longer says STAY TUNED."""
+    changed = []
+    for date in SINGAPORE_DATES:
+        # Look for the date, then capture what follows up to the next blank
+        # line or end of relevant block. The site lists each entry as:
+        #   DECEMBER 17, 2026
+        #   SINGAPORE
+        #   STAY TUNED  (or, when tickets are live, something else)
+        pattern = re.compile(
+            re.escape(date) + r"\s*\n\s*SINGAPORE\s*\n\s*([^\n]+)",
+            re.IGNORECASE,
+        )
+        match = pattern.search(new_text)
+        if match:
+            status = match.group(1).strip()
+            if status.upper() != "STAY TUNED":
+                changed.append(f"{date}: {status}")
+    return changed
 
 
 def send_telegram_message(token: str, chat_id: str, text: str) -> None:
@@ -68,24 +99,48 @@ def send_telegram_message(token: str, chat_id: str, text: str) -> None:
     }).encode("utf-8")
     req = urllib.request.Request(url, data=data, method="POST")
     with urllib.request.urlopen(req, timeout=30) as response:
-        response.read()  # discard, but ensures completion
+        response.read()
+
+
+def build_status_message(snapshot_date: str) -> str:
+    return (
+        f"📅 {snapshot_date}\n"
+        f"BTS Singapore tickets: still 'STAY TUNED' across all four dates "
+        f"(17, 19, 20, 22 Dec 2026)."
+    )
+
+
+def build_alert_message(
+    snapshot_date: str,
+    changed_dates: list[str],
+    diff_lines: list[str],
+) -> str:
+    lines = [
+        "🚨🚨🚨 TICKET ALERT 🚨🚨🚨",
+        "🎟️🎟️🎟️ BTS SINGAPORE 🎟️🎟️🎟️",
+        "",
+        f"📅 Snapshot: {snapshot_date}",
+        "",
+    ]
+    if changed_dates:
+        lines.append("✨ Dates no longer 'STAY TUNED':")
+        for entry in changed_dates:
+            lines.append(f"  🎉 {entry}")
+    else:
+        lines.append("⚠️ Relevant change detected but no specific Singapore date flipped.")
+        lines.append("Check the page directly: https://ibighit.com/en/bts/tour/")
+    lines.append("")
+    lines.append("🔍 Diff highlights:")
+    for line in diff_lines[:15]:
+        lines.append(f"  {line}")
+    if len(diff_lines) > 15:
+        lines.append(f"  ...and {len(diff_lines) - 15} more line(s).")
+    lines.append("")
+    lines.append("💜 Go check Claude for the full analysis. 💜")
+    return "\n".join(lines)[:3800]
 
 
 def main() -> int:
-    snapshots = latest_two_snapshots()
-    if len(snapshots) < 2:
-        print("Fewer than two snapshots; nothing to compare.")
-        return 0
-
-    old_path, new_path = snapshots
-    old_lines = old_path.read_text(encoding="utf-8").splitlines()
-    new_lines = new_path.read_text(encoding="utf-8").splitlines()
-
-    relevant = relevant_diff_lines(old_lines, new_lines)
-    if not relevant:
-        print(f"No relevant changes between {old_path.name} and {new_path.name}.")
-        return 0
-
     token = os.environ.get("TELEGRAM_BOT_TOKEN")
     chat_ids_raw = os.environ.get("TELEGRAM_CHAT_IDS", "")
     if not token or not chat_ids_raw:
@@ -93,25 +148,34 @@ def main() -> int:
         return 1
     chat_ids = [c.strip() for c in chat_ids_raw.split(",") if c.strip()]
 
-    # Cap message length for Telegram (4096-char limit; we leave headroom).
-    summary_lines = [
-        "girlwithticket: BTS tour page changed.",
-        f"Compared {old_path.name} → {new_path.name}.",
-        "",
-        "Relevant diff lines:",
-    ]
-    summary_lines.extend(relevant[:40])
-    if len(relevant) > 40:
-        summary_lines.append(f"...and {len(relevant) - 40} more line(s).")
-    summary_lines.append("")
-    summary_lines.append("Ask Claude in the project for the full analysis.")
+    snapshots = latest_two_snapshots()
+    if not snapshots:
+        print("No snapshots at all; nothing to do.")
+        return 0
 
-    message = "\n".join(summary_lines)[:3800]
+    new_path = snapshots[-1]
+    new_text = new_path.read_text(encoding="utf-8")
+    snapshot_date = new_path.stem  # e.g. "2026-05-17"
+
+    # If we don't have two snapshots yet, just send the status message.
+    if len(snapshots) < 2:
+        message = build_status_message(snapshot_date)
+    else:
+        old_path = snapshots[-2]
+        old_lines = old_path.read_text(encoding="utf-8").splitlines()
+        new_lines = new_text.splitlines()
+        diff_lines = relevant_diff_lines(old_lines, new_lines)
+
+        if not diff_lines:
+            message = build_status_message(snapshot_date)
+        else:
+            changed = changed_singapore_dates(new_text)
+            message = build_alert_message(snapshot_date, changed, diff_lines)
 
     for chat_id in chat_ids:
         try:
             send_telegram_message(token, chat_id, message)
-            print(f"Alert sent to {chat_id}.")
+            print(f"Message sent to {chat_id}.")
         except Exception as exc:
             print(f"Failed to send to {chat_id}: {exc}", file=sys.stderr)
 

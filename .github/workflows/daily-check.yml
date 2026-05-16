@@ -2,7 +2,8 @@ name: Daily BTS Tour Page Snapshot
 
 on:
   schedule:
-    - cron: "0 9 * * *"
+    - cron: "0 9 * * *" # 09:00 UTC → 17:00 Singapore / 18:00 Seoul
+    - cron: "0 23 * * *" # 23:00 UTC → 07:00 Singapore / 08:00 Seoul next day
   workflow_dispatch:
 
 jobs:
